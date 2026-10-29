@@ -1,0 +1,30 @@
+from pathlib import Path
+p=Path('/data/lapka-app/app.js'); lines=p.read_text().splitlines()
+def rep(prefix,new):
+ for i,l in enumerate(lines):
+  if l.startswith(prefix): lines[i]=new; return
+ raise ValueError(prefix)
+rep('  function petForm(', '''  function petForm(p=null){const edit=!!p;openModal(edit?'Профиль питомца':'Новый профиль питомца',edit?'Обновите фото или сведения питомца.':'Добавьте питомца и выберите его фото профиля.',`<form id="pet-form">${field('Имя питомца *','name',p?.name||'','text','Например, Рада')}<div class="form-row">${selectField('Вид','species',p?.species||'Собака',['Собака','Кошка','Другое'])}${field('Порода','breed',p?.breed||'','text','Если знаете')}</div><div class="form-row">${field('Дата рождения','birthDate',p?.birthDate||'','date')}${selectField('Значок','emoji',p?.emoji||'🐕',['🐕','🐈','🐇','🐾','🦜','🐢'])}</div><div class="field"><span class="label">Фото профиля питомца</span><div id="pet-photo-preview">${petIcon(p,'pet-avatar profile-pet-avatar')}</div><label class="label" for="f-photo">Загрузить фото</label><input class="input" type="file" id="f-photo" accept="image/*"/><div class="help">JPG, PNG или WebP, до 10 МБ. Фото хранится в этом браузере и не публикуется автоматически.</div>${p?.photoId?`<button type="button" class="btn btn-quiet btn-small" data-action="remove-pet-photo">Убрать фото</button>`:''}</div>${textField('Заметка','note',p?.note||'','Особенности, которые важно помнить')}<input type="hidden" name="id" value="${p?.id||''}"/><input type="hidden" name="currentPhotoId" id="current-photo-id" value="${esc(p?.photoId||'')}"/><div class="modal-footer"><button type="button" class="btn btn-secondary" data-action="close-modal">Отмена</button><button class="btn btn-primary">${edit?'Сохранить профиль':'Создать профиль'}</button></div></form>`);hydrateImages()}''')
+# Extend image hydration to handle both gallery and profile thumbnails.
+rep('  async function hydrateImages(', '''  async function hydrateImages(){document.querySelectorAll('img[data-local-file]').forEach(async img=>{try{const b=await fileDB.get(img.dataset.localFile);if(b){const url=URL.createObjectURL(b);img.src=url;img.onload=()=>img.parentElement.querySelector('.photo-fallback,.pet-fallback')?.remove()}}catch{}})}''')
+# Ensure modal images hydrate when editing a profile.
+rep('  function openModal(', '''  function openModal(titleText,desc,body,opts={}){modal={title:titleText,desc,body,wide:!!opts.wide,footer:opts.footer||''};renderModal();hydrateImages();setTimeout(()=>modalRoot.querySelector('input,select,textarea,button')?.focus(),30)}''')
+# Keep deletion private and remove profile photo blob too.
+s='\n'.join(lines)
+s=s.replace("const fileItems=[...state.documents,...state.photos].filter(x=>x.petId===id);for(const x of fileItems)try{await fileDB.del(x.fileId)}catch{}state.pets=", "const fileItems=[...state.documents,...state.photos].filter(x=>x.petId===id);for(const x of fileItems)try{await fileDB.del(x.fileId)}catch{}if(p?.photoId)try{await fileDB.del(p.photoId)}catch{}state.pets=")
+# On a selected profile-photo file, show an immediate local preview only.
+needle="  document.addEventListener('change',e=>{if(e.target.matches('#top-pet-select,#hero-pet-select'))"
+replacement="  document.addEventListener('change',e=>{if(e.target.id==='f-photo'){const file=e.target.files?.[0];if(file&&file.type.startsWith('image/')){const box=document.getElementById('pet-photo-preview');if(box){const url=URL.createObjectURL(file);box.innerHTML=`<div class=\"pet-avatar pet-photo-frame profile-pet-avatar\"><img src=\"${url}\" alt=\"Предпросмотр фото питомца\"></div>`}}}if(e.target.matches('#top-pet-select,#hero-pet-select'))"
+if needle not in s: raise ValueError('change handler needle missing')
+s=s.replace(needle,replacement,1)
+# Remove an existing photo explicitly in the pet edit form.
+needle="case'edit-pet':petForm(petById(id));break;case'delete-pet':"
+replacement="case'edit-pet':petForm(petById(id));break;case'remove-pet-photo':{const hidden=document.getElementById('current-photo-id');if(hidden)hidden.value='';const box=document.getElementById('pet-photo-preview');if(box)box.innerHTML=`<div class=\"pet-avatar pet-photo-frame profile-pet-avatar\"><span class=\"pet-fallback\">🐾</span></div>`;b.remove();break}case'delete-pet':"
+if needle not in s: raise ValueError('pet action needle missing')
+s=s.replace(needle,replacement,1)
+# Make profile submit asynchronous so it can persist an image blob locally.
+old="if(formId==='pet-form'){const name=String(data.get('name')||'').trim();if(!name){notify('Укажите имя питомца');return}const id=String(data.get('id')||'');const obj={id:id||uid(),name,species:data.get('species'),breed:String(data.get('breed')||'').trim(),birthDate:data.get('birthDate')||'',note:String(data.get('note')||'').trim(),emoji:data.get('emoji')||'🐾',demo:false};if(id)state.pets=state.pets.map(x=>x.id===id?{...x,...obj}:x);else{state.pets.push(obj);state.activePetId=obj.id}save();closeModal();render();notify(id?'Профиль обновлён':'Питомец добавлен')}"
+new="if(formId==='pet-form'){const name=String(data.get('name')||'').trim();if(!name){notify('Укажите имя питомца');return}const id=String(data.get('id')||''),old=petById(id),file=document.getElementById('f-photo')?.files?.[0];if(file&&(!file.type.startsWith('image/')||file.size>10*1024*1024)){notify('Выберите изображение до 10 МБ');return}let photoId=String(data.get('currentPhotoId')||'');if(file){photoId=uid();try{await fileDB.put(photoId,file)}catch{notify('Не удалось сохранить фото в браузере');return}}const obj={id:id||uid(),name,species:data.get('species'),breed:String(data.get('breed')||'').trim(),birthDate:data.get('birthDate')||'',note:String(data.get('note')||'').trim(),emoji:data.get('emoji')||'🐾',photoId};if(id)state.pets=state.pets.map(x=>x.id===id?{...x,...obj}:x);else{state.pets.push(obj);state.activePetId=obj.id}if(old?.photoId&&old.photoId!==photoId)try{await fileDB.del(old.photoId)}catch{}save();closeModal();render();notify(id?'Профиль обновлён':'Профиль питомца создан')}"
+if old not in s: raise ValueError('pet submit text not found')
+s=s.replace(old,new,1)
+p.write_text(s+'\n')
